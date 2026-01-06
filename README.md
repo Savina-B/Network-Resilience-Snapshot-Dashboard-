@@ -53,3 +53,5 @@ This public version:
 - Removes organisational branding and internal references
 
 - Uses representative data schemas and synthetic or aggregated values
+<img width="1024" height="490" alt="image" src="https://github.com/user-attachments/assets/d0e99e7e-172f-4cfb-86f8-25f035181f9d" />
+
