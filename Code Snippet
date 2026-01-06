@@ -1,0 +1,156 @@
+"""
+Sanitised excerpt — identifiers and data sources have been anonymised.
+This demonstrates an interactive Dash app with:
+- asset selection
+- normalization toggle
+- map marker update
+- CSV + PDF exports
+- simple interaction logging
+"""
+
+import os, io, base64
+from datetime import datetime
+
+import pandas as pd
+import dash
+import dash_bootstrap_components as dbc
+from dash import dcc, html, Input, Output, State
+import plotly.graph_objects as go
+import dash_leaflet as dl
+
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+
+
+# --- Data (anonymised) ---
+df = pd.read_csv("snapshot_data.csv")  # columns include Asset_ID, Asset_Name, Latitude, Longitude, metrics...
+
+
+# --- Basic interaction logging (optional) ---
+LOG_PATH = "usage_log.csv"
+if not os.path.exists(LOG_PATH):
+    with open(LOG_PATH, "w") as f:
+        f.write("timestamp,event,asset,detail\n")
+
+def log_event(event, asset="", detail=""):
+    with open(LOG_PATH, "a") as f:
+        f.write(f"{datetime.now().isoformat()},{event},{asset},{detail}\n")
+
+
+# --- App ---
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+app.title = "Snapshot Dashboard"
+
+app.layout = dbc.Container([
+    dbc.Row([
+        dbc.Col(html.H2("Network Resilience Snapshot Dashboard", className="text-center"))
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col(dcc.Dropdown(
+            id="asset-dropdown",
+            options=[{"label": a, "value": a} for a in df["Asset_Name"].unique()],
+            placeholder="Select an asset"
+        ), width=6),
+
+        dbc.Col(dcc.RadioItems(
+            id="view-mode",
+            options=[
+                {"label": "Actual Values", "value": "actual"},
+                {"label": "Normalized (0–100)", "value": "normalized"},
+            ],
+            value="normalized",
+            labelStyle={"display": "inline-block", "margin": "0 10px"},
+        ), width=6),
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col(html.Div(id="snapshot-card"), width=4),
+        dbc.Col(dcc.Graph(id="metrics-chart"), width=8),
+    ], className="mb-4"),
+
+    html.Hr(),
+    html.H4("Map View", className="text-center"),
+
+    dl.Map([
+        dl.TileLayer(),
+        dl.LayerGroup(id="map-marker")
+    ], center=[52.6, -1.5], zoom=6, style={"width": "100%", "height": "400px"}),
+
+    html.Br(),
+    dbc.Row([
+        dbc.Col(html.Button("Download CSV", id="download-btn", className="btn btn-outline-primary"), width="auto"),
+        dbc.Col(html.Button("Download PDF Report", id="pdf-btn", className="btn btn-outline-secondary"), width="auto"),
+    ], justify="center"),
+
+    dcc.Download(id="download-csv"),
+    dcc.Download(id="download-pdf"),
+], fluid=True)
+
+
+@app.callback(Output("snapshot-card", "children"), Input("asset-dropdown", "value"))
+def snapshot(asset):
+    if not asset:
+        return ""
+    row = df[df["Asset_Name"] == asset].iloc[0]
+    log_event("asset_selected", asset)
+
+    return dbc.Card([
+        dbc.CardHeader(f"{row['Asset_Name']} ({row.get('Mode','N/A')})"),
+        dbc.CardBody([
+            html.P(f"Area: {row.get('Area','Region X')}"),
+            html.P(f"Planned Events: {row['Planned_Events_Days']} days"),
+            html.P(f"Weather Disruptions: {row['Unplanned_Weather_Days']} days"),
+            html.P(f"Flood Exposure: {row['Flood_Zone_Percent']}%"),
+            html.P(f"Incident Rate: {row['Incident_Rate']}"),
+            html.P(f"Demand: {row['Demand']}"),
+        ])
+    ])
+
+
+@app.callback(Output("map-marker", "children"), Input("asset-dropdown", "value"))
+def map_marker(asset):
+    if not asset:
+        return []
+    row = df[df["Asset_Name"] == asset].iloc[0]
+    return [dl.Marker(
+        position=[row["Latitude"], row["Longitude"]],
+        children=dl.Tooltip("Selected asset")
+    )]
+
+
+@app.callback(
+    Output("metrics-chart", "figure"),
+    [Input("asset-dropdown", "value"), Input("view-mode", "value")]
+)
+def chart(asset, view_mode):
+    if not asset:
+        return go.Figure()
+
+    row = df[df["Asset_Name"] == asset].iloc[0]
+    metrics = {
+        "Planned Events (days)": row["Planned_Events_Days"],
+        "Unplanned Weather (days)": row["Unplanned_Weather_Days"],
+        "Flood Exposure (%)": row["Flood_Zone_Percent"],
+        "Incident Rate": row["Incident_Rate"],
+        "Demand": row["Demand"]
+    }
+    max_values = {
+        "Planned Events (days)": 4000,
+        "Unplanned Weather (days)": 100,
+        "Flood Exposure (%)": 30,
+        "Incident Rate": 1200,
+        "Demand": 150000
+    }
+
+    y = [(metrics[k] / max_values[k]) * 100 for k in metrics] if view_mode == "normalized" else list(metrics.values())
+
+    fig = go.Figure(go.Bar(x=list(metrics.keys()), y=y))
+    fig.update_layout(
+        title="Key Metrics",
+        xaxis_title="Metric",
+        yaxis_title="Score (0–100)" if view_mode == "normalized" else "Value",
+        hovermode="x"
+    )
+    return fig
